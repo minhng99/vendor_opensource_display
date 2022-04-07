@@ -217,6 +217,12 @@ static void dsi_bridge_pre_enable(struct drm_bridge *bridge)
 	if (rc)
 		DSI_ERR("Continuous splash pipeline cleanup failed, rc=%d\n",
 									rc);
+	rc = dsi_display_dsi86_init(c_bridge->display);
+	if (rc) {
+		DSI_ERR("[%d] DSI displaydsi86_init failed, rc=%d\n",
+		       c_bridge->id, rc);
+		return;
+	}
 }
 
 static void dsi_bridge_enable(struct drm_bridge *bridge)

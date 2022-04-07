@@ -481,6 +481,8 @@ int dsi_display_config_ctrl_for_cont_splash(struct dsi_display *display);
  */
 int dsi_display_enable(struct dsi_display *display);
 
+int dsi_display_dsi86_init(struct dsi_display *display);
+
 /**
  * dsi_display_post_enable() - perform post enable operations.
  * @display:         Handle to display.

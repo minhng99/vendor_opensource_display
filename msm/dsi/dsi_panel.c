@@ -3,6 +3,8 @@
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  */
 
+#define DEBUG 1
+#define pr_fmt(fmt)	"msm-dsi-panel:[%s:%d] " fmt, __func__, __LINE__
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/gpio.h>
@@ -14,6 +16,9 @@
 #include "dsi_ctrl_hw.h"
 #include "dsi_parser.h"
 #include "sde_dbg.h"
+
+#include "dsi86-edp-mux.h"
+#include "scaler.h"
 
 /**
  * topology is currently defined by a set of following 3 values:
@@ -32,6 +37,7 @@
 #define MAX_PANEL_JITTER		10
 #define DEFAULT_PANEL_PREFILL_LINES	25
 #define MIN_PREFILL_LINES      35
+#define BACKLIGHT_MUX_EN_DELAY_TIME 110
 
 enum dsi_dsc_ratio_type {
 	DSC_8BPC_8BPP,
@@ -40,6 +46,8 @@ enum dsi_dsc_ratio_type {
 	DSC_10BPC_10BPP,
 	DSC_RATIO_TYPE_MAX
 };
+
+static bool panel_off;
 
 static u32 dsi_dsc_rc_buf_thresh[] = {0x0e, 0x1c, 0x2a, 0x38, 0x46, 0x54,
 		0x62, 0x69, 0x70, 0x77, 0x79, 0x7b, 0x7d, 0x7e};
@@ -362,6 +370,8 @@ static int dsi_panel_reset(struct dsi_panel *panel)
 	struct dsi_panel_reset_config *r_config = &panel->reset_config;
 	int i;
 
+	goto exit; //DSI86
+
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio)) {
 		rc = gpio_direction_output(panel->reset_config.disp_en_gpio, 1);
 		if (rc) {
@@ -432,11 +442,16 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 
 	if (panel->host_config.ext_bridge_mode)
 		return 0;
+	if (IS_ERR_OR_NULL(panel->pinctrl.pinctrl))
+		return 0;
 
 	if (enable)
 		state = panel->pinctrl.active;
 	else
 		state = panel->pinctrl.suspend;
+
+	if (IS_ERR_OR_NULL(state))
+		return rc;
 
 	rc = pinctrl_select_state(panel->pinctrl.pinctrl, state);
 	if (rc)
@@ -446,17 +461,26 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 	return rc;
 }
 
+bool dsi_panel_is_off()
+{
+	return panel_off;
+}
 
 static int dsi_panel_power_on(struct dsi_panel *panel)
 {
 	int rc = 0;
+	pr_debug("%s dsi86 \n", __func__);
+
+	panel_off = false;
 
 	rc = dsi_pwr_enable_regulator(&panel->power_info, true);
 	if (rc) {
-		DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+		pr_err("[%s] failed to enable vregs, rc=%d\n",
 				panel->name, rc);
 		goto exit;
 	}
+
+	return 0; //DSI86
 
 	rc = dsi_panel_set_pinctrl_state(panel, true);
 	if (rc) {
@@ -491,6 +515,9 @@ exit:
 static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
+	enum CONNECTION_STATUS tv_connection_status = get_connection_status();
+
+	pr_err("%s enter \n", __func__);
 
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
@@ -511,14 +538,69 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 
 	rc = dsi_panel_set_pinctrl_state(panel, false);
 	if (rc) {
-		DSI_ERR("[%s] failed set pinctrl state, rc=%d\n", panel->name,
+		pr_err("[%s] failed set pinctrl state, rc=%d\n", panel->name,
 		       rc);
 	}
 
 	rc = dsi_pwr_enable_regulator(&panel->power_info, false);
 	if (rc)
-		DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+		pr_err("[%s] failed to enable vregs, rc=%d\n",
 				panel->name, rc);
+	pr_err("dsi panel off");
+
+	msleep(3);
+	/* DSI86 Switch Off Begin */
+
+	if(tv_connection_status == CONNECTING ||tv_connection_status == CONNECTED) {
+		pr_info("%s: tv connected, skip turn-off edp-mux, etc. \n", __func__);
+		rc = turn_on_dsi86(false);
+		if (rc) {
+			pr_err("unable to turn off dsi86, rc = %d\n", rc);
+		}
+	} else {
+#if 0
+	rc = turn_on_led_vss_loadswitch(false);
+	if (rc) {
+		pr_err("[%s] dsi86_backlight_power failed, rc=%d",
+			panel->name, rc);
+	}
+
+	msleep(3);
+#endif
+	rc = turn_on_led_vss(false);
+	if (rc) {
+		pr_err("failed to turn off led_vss rc=%d\n", rc);
+	}
+
+	rc = turn_on_dp_mux(false);
+	if (rc) {
+		pr_err("failed to turn off dp_mux, rc=%d\n", rc);
+	}
+
+	rc = turn_on_dsi86(false);
+	if (rc) {
+		pr_err("unable to turn off dsi86, rc = %d\n", rc);
+	}
+#if 0
+	rc = turn_on_io_mux(false);
+	if(rc) {
+		pr_err("fail to turn on io mux, rc=%d\n", rc);
+	}
+#endif
+
+	rc = turn_on_lcd_vcc_loadswitch(false);
+	if (rc) {
+		pr_err("unable to turn off lcd vcc loadswitch, rc=%d\n", rc);
+	}
+
+	rc = turn_on_lcd_vcc(false);
+	if (rc) {
+		pr_err("unable to turn on lcd_vcc, rc=%d\n", rc);
+	}
+	}
+	/* DSI86 Switch Off End */
+
+	panel_off = true;
 
 	return rc;
 }
@@ -580,7 +662,8 @@ static int dsi_panel_pinctrl_deinit(struct dsi_panel *panel)
 
 	if (panel->host_config.ext_bridge_mode)
 		return 0;
-
+	if (IS_ERR_OR_NULL(panel->pinctrl.pinctrl))
+		return 0;
 	devm_pinctrl_put(panel->pinctrl.pinctrl);
 
 	return rc;
@@ -599,6 +682,13 @@ static int dsi_panel_pinctrl_init(struct dsi_panel *panel)
 		rc = PTR_ERR(panel->pinctrl.pinctrl);
 		DSI_ERR("failed to get pinctrl, rc=%d\n", rc);
 		goto error;
+	}
+
+	panel->pinctrl.initpwm = pinctrl_lookup_state(panel->pinctrl.pinctrl,
+						       "pwm_config");
+	if (IS_ERR_OR_NULL(panel->pinctrl.initpwm)) {
+		/* NO TOUCH RC */
+		DSI_ERR("failed to get pinctrl pwm config, rc=%d\n", PTR_ERR(panel->pinctrl.initpwm));
 	}
 
 	panel->pinctrl.active = pinctrl_lookup_state(panel->pinctrl.pinctrl,
@@ -620,6 +710,17 @@ static int dsi_panel_pinctrl_init(struct dsi_panel *panel)
 
 error:
 	return rc;
+}
+
+static void bl_delay_light_work(struct work_struct *work)
+{
+	int rc = -1;
+
+	rc = turn_on_bl_en(1);
+	if (rc) {
+		pr_err("dsi86_backlight power on failed, rc=%d", rc);
+	}
+	pr_err("turn on backlight \n");
 }
 
 static int dsi_panel_wled_register(struct dsi_panel *panel,
@@ -669,45 +770,79 @@ static int dsi_panel_update_pwm_backlight(struct dsi_panel *panel,
 	struct dsi_backlight_config *bl;
 
 	if (!panel) {
-		DSI_ERR("Invalid Params\n");
+		pr_err("Invalid Params\n");
 		return -EINVAL;
 	}
 
 	bl = &panel->bl_config;
 	if (!bl->pwm_bl) {
-		DSI_ERR("pwm device not found\n");
+		pr_err("pwm device not found\n");
 		return -EINVAL;
 	}
 
+	if (bl_lvl > bl->bl_max_level) {
+		bl_lvl = bl->bl_max_level -1;
+	}
 	period_ns = bl->pwm_period_usecs * NSEC_PER_USEC;
 	duty = bl_lvl * period_ns;
 	duty /= bl->bl_max_level;
 
-	rc = pwm_config(bl->pwm_bl, duty, period_ns);
-	if (rc) {
-		DSI_ERR("[%s] failed to change pwm config, rc=\n", panel->name,
-			rc);
-		goto error;
+	pr_err("%s period_ns=%d, duty=%d bl_max_levl=%d bl_lvl=%d\n",__func__, period_ns, duty, bl->bl_max_level, bl_lvl);
+	if (!bl->pwm_enabled && bl_lvl > 0) {
+		//Load Swith U3211, BLK1_PWR_CONN, 865_BL_PWR_EN
+		rc = turn_on_led_vss_loadswitch(1);
+		if (rc) {
+			pr_err("unable to turn on led_vss loadswitch, rc=%d\n", rc);
+		}
+		mdelay(3);
 	}
 
 	if (bl_lvl == 0 && bl->pwm_enabled) {
+		pr_err("backlight turn off bl_en first \n");
+		rc = turn_on_bl_en(0);
+		if (rc) {
+			pr_err("[%s] dsi86_backlight off failed, rc=%d", rc);
+		}
+
+		mdelay(10);
+	}
+
+	rc = pwm_config(bl->pwm_bl, duty, period_ns);
+	if (rc) {
+		pr_err("[%s] failed to change pwm config, rc=\n", panel->name,
+			rc);
+		//goto error;
+	}
+	pr_err("%s pwm_config rc=%d pwm_enalbe=%d \n", __func__, rc, bl->pwm_enabled);
+	if (bl_lvl == 0 && bl->pwm_enabled) {
 		pwm_disable(bl->pwm_bl);
+
+		pr_err("backlight turn off bl power \n");
+		rc = turn_on_led_vss_loadswitch(0);
+		if (rc) {
+			pr_err("[%s] dsi86_backlight power off failed, rc=%d", rc);
+		}
+
 		bl->pwm_enabled = false;
 		return 0;
 	}
 
-	if (!bl->pwm_enabled) {
+	//if (!bl->pwm_enabled) {
+	if (bl_lvl > 0) {	
 		rc = pwm_enable(bl->pwm_bl);
 		if (rc) {
-			DSI_ERR("[%s] failed to enable pwm, rc=\n", panel->name,
+			pr_err("[%s] failed to enable pwm, rc=\n", panel->name,
 				rc);
-			goto error;
+			//goto error;
 		}
+	}
 
+	if (!bl->pwm_enabled && bl_lvl > 0) {
+		schedule_delayed_work(&panel->bl_config.bl_work, msecs_to_jiffies(BACKLIGHT_MUX_EN_DELAY_TIME));
 		bl->pwm_enabled = true;
 	}
 
-error:
+//error:
 	return rc;
 }
 
@@ -816,6 +951,7 @@ static int dsi_panel_bl_register(struct dsi_panel *panel)
 		rc = -ENOTSUPP;
 		goto error;
 	}
+	INIT_DELAYED_WORK(&panel->bl_config.bl_work, bl_delay_light_work);
 
 error:
 	return rc;
@@ -1972,6 +2108,7 @@ static int dsi_panel_parse_reset_sequence(struct dsi_panel *panel)
 	struct dsi_parser_utils *utils = &panel->utils;
 	struct dsi_reset_seq *seq;
 
+	return 0; //DSI86
 	if (panel->host_config.ext_bridge_mode)
 		return 0;
 
@@ -2124,7 +2261,7 @@ static int dsi_panel_parse_power_cfg(struct dsi_panel *panel)
 	rc = dsi_pwr_of_get_vreg_data(&panel->utils,
 			&panel->power_info, supply_name);
 	if (rc) {
-		DSI_ERR("[%s] failed to parse vregs\n", panel->name);
+		DSI_INFO("[%s] failed to parse vregs\n", panel->name);
 		goto error;
 	}
 
@@ -2152,8 +2289,8 @@ static int dsi_panel_parse_gpios(struct dsi_panel *panel)
 	if (!gpio_is_valid(panel->reset_config.reset_gpio) &&
 		!panel->host_config.ext_bridge_mode) {
 		rc = panel->reset_config.reset_gpio;
-		DSI_ERR("[%s] failed get reset gpio, rc=%d\n", panel->name, rc);
-		goto error;
+		DSI_INFO("[%s] failed get reset gpio, rc=%d\n", panel->name, rc);
+		//goto error; /* Disable no reset error */
 	}
 
 	panel->reset_config.disp_en_gpio = utils->get_named_gpio(utils->data,
@@ -2298,6 +2435,17 @@ static int dsi_panel_parse_bl_config(struct dsi_panel *panel)
 	} else {
 		panel->bl_config.bl_max_level = val;
 	}
+
+
+	rc = utils->read_u32(utils->data, "qcom,mdss-dsi-bl-default-level", &val);
+	if (rc) {
+		DSI_DEBUG("[%s] bl-default-level unspecified, defaulting to 0\n",
+			 panel->name);
+		panel->bl_config.bl_default_level = 0;
+	} else {
+		panel->bl_config.bl_default_level = val;
+	}
+
 
 	rc = utils->read_u32(utils->data, "qcom,mdss-brightness-max-level",
 		&val);
@@ -3337,7 +3485,7 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 
 	rc = dsi_panel_parse_power_cfg(panel);
 	if (rc)
-		DSI_ERR("failed to parse power config, rc=%d\n", rc);
+		DSI_INFO("failed to parse power config, rc=%d\n", rc);
 
 	rc = dsi_panel_parse_bl_config(panel);
 	if (rc) {
@@ -3378,7 +3526,6 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 		goto error;
 
 	mutex_init(&panel->panel_lock);
-
 	return panel;
 error:
 	kfree(panel);
@@ -3431,7 +3578,8 @@ int dsi_panel_drv_init(struct dsi_panel *panel,
 	if (rc) {
 		DSI_ERR("[%s] failed to init pinctrl, rc=%d\n",
 				panel->name, rc);
-		goto error_vreg_put;
+             /* EDP PIN Control in DSI86 */
+	     /*	goto error_vreg_put; */
 	}
 
 	rc = dsi_panel_gpio_request(panel);
@@ -3448,6 +3596,17 @@ int dsi_panel_drv_init(struct dsi_panel *panel,
 			       panel->name, rc);
 		goto error_gpio_release;
 	}
+	/* Default BL */
+	if(panel->bl_config.bl_default_level > 0)
+		dsi_panel_set_backlight(panel, panel->bl_config.bl_default_level);
+
+	if(!IS_ERR_OR_NULL(panel->pinctrl.initpwm)){
+		if(pinctrl_select_state(panel->pinctrl.pinctrl, panel->pinctrl.initpwm))
+			pr_err("failed to set init pwm pin state\n");
+		else
+			pr_info("success to set int pwm pin state\n");
+
+	}
 
 	goto exit;
 
@@ -3455,7 +3614,7 @@ error_gpio_release:
 	(void)dsi_panel_gpio_release(panel);
 error_pinctrl_deinit:
 	(void)dsi_panel_pinctrl_deinit(panel);
-error_vreg_put:
+/* error_vreg_put:*/
 	(void)dsi_panel_vreg_put(panel);
 exit:
 	mutex_unlock(&panel->panel_lock);
@@ -3908,7 +4067,8 @@ int dsi_panel_pre_prepare(struct dsi_panel *panel)
 	rc = dsi_panel_power_on(panel);
 	if (rc) {
 		DSI_ERR("[%s] panel power on failed, rc=%d\n", panel->name, rc);
-		goto error;
+		/* PWR Contrl in DSI86 */
+		/* goto error; */
 	}
 
 error:
@@ -4054,7 +4214,8 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 		if (rc) {
 			DSI_ERR("[%s] panel power on failed, rc=%d\n",
 			       panel->name, rc);
-			goto error;
+			/* PWR Control in DSI86 */
+			/* goto error;  */
 		}
 	}
 
@@ -4492,6 +4653,11 @@ int dsi_panel_post_unprepare(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
+	rc = turn_off_dsi86_by_cmd();
+	if (rc < 0) {
+		DSI_ERR("[%s] dsi86 power_Off cmd send failed, rc=%d\n",
+		       panel->name, rc);
+	}
 
 	rc = dsi_panel_power_off(panel);
 	if (rc) {
@@ -4501,5 +4667,6 @@ int dsi_panel_post_unprepare(struct dsi_panel *panel)
 	}
 error:
 	mutex_unlock(&panel->panel_lock);
+
 	return rc;
 }

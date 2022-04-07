@@ -2,6 +2,8 @@
 /*
  * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  */
+#define DEBUG
+#define pr_fmt(fmt)	"msm-dsi-display:[%s] " fmt, __func__
 
 #include <linux/list.h>
 #include <linux/of.h>
@@ -20,6 +22,8 @@
 #include "dsi_pwr.h"
 #include "sde_dbg.h"
 #include "dsi_parser.h"
+#include "dsi86-edp-mux.h"
+#include "scaler.h"
 
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
 #define INT_BASE_10 10
@@ -32,11 +36,13 @@
 
 #define DSI_CLOCK_BITRATE_RADIX 10
 #define MAX_TE_SOURCE_ID  2
-
+#ifdef CONFIG_HW_BOOT_INFO
+extern int register_hardware_info(const char *name, const char *model);
+#endif
 static char dsi_display_primary[MAX_CMDLINE_PARAM_LEN];
 static char dsi_display_secondary[MAX_CMDLINE_PARAM_LEN];
 static struct dsi_display_boot_param boot_displays[MAX_DSI_ACTIVE_DISPLAY] = {
-	{.boot_param = dsi_display_primary},
+	{.boot_param = dsi_display_primary}, /* To-Do no lable in panel dts*/
 	{.boot_param = dsi_display_secondary},
 };
 
@@ -211,7 +217,7 @@ int dsi_display_set_backlight(struct drm_connector *connector,
 	}
 
 	panel->bl_config.bl_level = bl_lvl;
-
+	pr_info("bl_levl=%d \n", bl_lvl);
 	/* scale backlight */
 	bl_scale = panel->bl_config.bl_scale;
 	bl_temp = bl_lvl * bl_scale / MAX_BL_SCALE_LEVEL;
@@ -219,24 +225,24 @@ int dsi_display_set_backlight(struct drm_connector *connector,
 	bl_scale_sv = panel->bl_config.bl_scale_sv;
 	bl_temp = (u32)bl_temp * bl_scale_sv / MAX_SV_BL_SCALE_LEVEL;
 
-	DSI_DEBUG("bl_scale = %u, bl_scale_sv = %u, bl_lvl = %u\n",
+	pr_info("bl_scale = %u, bl_scale_sv = %u, bl_lvl = %u\n",
 		bl_scale, bl_scale_sv, (u32)bl_temp);
 	rc = dsi_display_clk_ctrl(dsi_display->dsi_clk_handle,
 			DSI_CORE_CLK, DSI_CLK_ON);
 	if (rc) {
-		DSI_ERR("[%s] failed to enable DSI core clocks, rc=%d\n",
+		pr_err("[%s] failed to enable DSI core clocks, rc=%d\n",
 		       dsi_display->name, rc);
 		goto error;
 	}
 
 	rc = dsi_panel_set_backlight(panel, (u32)bl_temp);
 	if (rc)
-		DSI_ERR("unable to set backlight\n");
+		pr_err("unable to set backlight\n");
 
 	rc = dsi_display_clk_ctrl(dsi_display->dsi_clk_handle,
 			DSI_CORE_CLK, DSI_CLK_OFF);
 	if (rc) {
-		DSI_ERR("[%s] failed to disable DSI core clocks, rc=%d\n",
+		pr_err("[%s] failed to disable DSI core clocks, rc=%d\n",
 		       dsi_display->name, rc);
 		goto error;
 	}
@@ -616,7 +622,7 @@ static void dsi_display_parse_te_data(struct dsi_display *display)
 			"qcom,panel-te-source", &val);
 
 	if (rc || (val  > MAX_TE_SOURCE_ID)) {
-		DSI_ERR("invalid vsync source selection\n");
+		DSI_INFO("invalid vsync source selection\n");
 		val = 0;
 	}
 
@@ -1759,14 +1765,14 @@ static int dsi_display_set_ulps(struct dsi_display *display, bool enable)
 	int i = 0;
 	struct dsi_display_ctrl *m_ctrl, *ctrl;
 
-
+	pr_info("%s enter enable=%d \n", __func__, enable);
 	if (!display) {
-		DSI_ERR("Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
 
 	if (!dsi_display_is_ulps_req_valid(display, enable)) {
-		DSI_DEBUG("%s: skipping ULPS config, enable=%d\n",
+		pr_debug("%s: skipping ULPS config, enable=%d\n",
 			__func__, enable);
 		return 0;
 	}
@@ -1780,6 +1786,11 @@ static int dsi_display_set_ulps(struct dsi_display *display, bool enable)
 	 * if ulps request is handled in PHY, then no need to send request
 	 * through controller.
 	 */
+	
+	if(enable) {
+		pr_err("ulps enable  \n");
+		
+	}	
 
 	rc = dsi_phy_set_ulps(m_ctrl->phy, &display->config, enable,
 			display->clamp_enabled);
@@ -2232,7 +2243,7 @@ static int dsi_display_parse_boot_display_selection(void)
 
 		/* Use ':' as a delimiter to retrieve the display name */
 		if (!pos) {
-			DSI_DEBUG("display name[%s]is not valid\n", disp_buf);
+			pr_debug("display name[%s]is not valid\n", disp_buf);
 			continue;
 		}
 
@@ -4193,7 +4204,7 @@ static int _dsi_display_dyn_update_clks(struct dsi_display *display,
 	dsi_clk_prepare_enable(enable_clk);
 
 	rc = dsi_clk_update_parent(parent_clk,
-				&display->clock_info.mux_clks);
+			      &display->clock_info.mux_clks);
 	if (rc) {
 		DSI_ERR("failed to update mux parent\n");
 		goto exit;
@@ -4245,7 +4256,7 @@ static int _dsi_display_dyn_update_clks(struct dsi_display *display,
 	}
 
 	rc = dsi_clk_update_parent(enable_clk,
-				&display->clock_info.mux_clks);
+			      &display->clock_info.mux_clks);
 
 	if (rc)
 		DSI_ERR("could not switch back to src clks %d\n", rc);
@@ -5338,7 +5349,7 @@ static void dsi_display_firmware_display(const struct firmware *fw,
 		display->fw = fw;
 
 		if (!strcmp(display->display_type, "primary"))
-			display->name = "dsi_firmware_display";
+		display->name = "dsi_firmware_display";
 
 		else if (!strcmp(display->display_type, "secondary"))
 			display->name = "dsi_firmware_display_secondary";
@@ -5402,7 +5413,7 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 		/* The panel name should be same as UEFI name index */
 		panel_node = of_find_node_by_name(mdp_node, boot_disp->name);
 		if (!panel_node)
-			DSI_WARN("panel_node %s not found\n", boot_disp->name);
+			DSI_INFO("panel_node %s not found\n", boot_disp->name);
 	} else {
 		panel_node = of_parse_phandle(node,
 				"qcom,dsi-default-panel", 0);
@@ -5424,10 +5435,10 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 	/* initialize display in firmware callback */
 	if (!boot_disp->boot_disp_en && IS_ENABLED(CONFIG_DSI_PARSER)) {
 		if (!strcmp(display->display_type, "primary"))
-			firm_req = !request_firmware_nowait(
-				THIS_MODULE, 1, "dsi_prop",
-				&pdev->dev, GFP_KERNEL, display,
-				dsi_display_firmware_display);
+		firm_req = !request_firmware_nowait(
+			THIS_MODULE, 1, "dsi_prop",
+			&pdev->dev, GFP_KERNEL, display,
+			dsi_display_firmware_display);
 
 		else if (!strcmp(display->display_type, "secondary"))
 			firm_req = !request_firmware_nowait(
@@ -5441,7 +5452,10 @@ int dsi_display_dev_probe(struct platform_device *pdev)
 		if (rc)
 			goto end;
 	}
-
+#ifdef CONFIG_HW_BOOT_INFO
+	if (!strcmp(display->display_type, "primary"))
+		register_hardware_info("LCD", "MND007ZA1-1");
+#endif
 	return 0;
 end:
 	if (display)
@@ -6642,7 +6656,7 @@ int dsi_display_validate_mode_change(struct dsi_display *display,
 						DSI_MODE_FLAG_DYN_CLK;
 				SDE_EVT32(SDE_EVTLOG_FUNC_CASE2,
 					cur_mode->pixel_clk_khz,
-					adj_mode->pixel_clk_khz);
+						adj_mode->pixel_clk_khz);
 			}
 		}
 	}
@@ -7123,44 +7137,41 @@ int dsi_display_prepare(struct dsi_display *display)
 	int rc = 0;
 	struct dsi_display_mode *mode;
 
+	pr_err("%s dsi86 0721 enter\n",__func__);
+
 	if (!display) {
-		DSI_ERR("Invalid params\n");
+		pr_err("Invalid params\n");
 		return -EINVAL;
 	}
-
 	if (!display->panel->cur_mode) {
-		DSI_ERR("no valid mode set for the display\n");
+		pr_err("no valid mode set for the display\n");
 		return -EINVAL;
 	}
 
 	SDE_EVT32(SDE_EVTLOG_FUNC_ENTRY);
 	mutex_lock(&display->display_lock);
-
 	mode = display->panel->cur_mode;
 
 	dsi_display_set_ctrl_esd_check_flag(display, false);
 
 	/* Set up ctrl isr before enabling core clk */
 	dsi_display_ctrl_isr_configure(display, true);
-
 	if (mode->dsi_mode_flags & DSI_MODE_FLAG_DMS) {
 		if (display->is_cont_splash_enabled &&
 		    display->config.panel_mode == DSI_OP_VIDEO_MODE) {
-			DSI_ERR("DMS not supported on first frame\n");
+			pr_err("DMS not supported on first frame\n");
 			rc = -EINVAL;
 			goto error;
 		}
-
 		if (!display->is_cont_splash_enabled) {
 			/* update dsi ctrl for new mode */
 			rc = dsi_display_pre_switch(display);
 			if (rc)
-				DSI_ERR("[%s] panel pre-switch failed, rc=%d\n",
+				pr_err("[%s] panel pre-switch failed, rc=%d\n",
 					display->name, rc);
 			goto error;
 		}
 	}
-
 	if (!(mode->dsi_mode_flags & DSI_MODE_FLAG_POMS) &&
 		(!display->is_cont_splash_enabled)) {
 		/*
@@ -7170,20 +7181,18 @@ int dsi_display_prepare(struct dsi_display *display)
 		 */
 		rc = dsi_panel_pre_prepare(display->panel);
 		if (rc) {
-			DSI_ERR("[%s] panel pre-prepare failed, rc=%d\n",
+			pr_err("[%s] panel pre-prepare failed, rc=%d\n",
 					display->name, rc);
 			goto error;
 		}
 	}
-
 	rc = dsi_display_clk_ctrl(display->dsi_clk_handle,
 			DSI_CORE_CLK, DSI_CLK_ON);
 	if (rc) {
-		DSI_ERR("[%s] failed to enable DSI core clocks, rc=%d\n",
+		pr_err("[%s] failed to enable DSI core clocks, rc=%d\n",
 		       display->name, rc);
 		goto error_panel_post_unprep;
 	}
-
 	/*
 	 * If ULPS during suspend feature is enabled, then DSI PHY was
 	 * left on during suspend. In this case, we do not need to reset/init
@@ -7194,29 +7203,30 @@ int dsi_display_prepare(struct dsi_display *display)
 	if (!display->panel->ulps_suspend_enabled || !display->ulps_enabled) {
 		rc = dsi_display_phy_sw_reset(display);
 		if (rc) {
-			DSI_ERR("[%s] failed to reset phy, rc=%d\n",
+			pr_err("[%s] failed to reset phy, rc=%d\n",
 				display->name, rc);
 			goto error_ctrl_clk_off;
 		}
 
 		rc = dsi_display_phy_enable(display);
 		if (rc) {
-			DSI_ERR("[%s] failed to enable DSI PHY, rc=%d\n",
+			pr_err("[%s] failed to enable DSI PHY, rc=%d\n",
 			       display->name, rc);
 			goto error_ctrl_clk_off;
 		}
 	}
 
+
 	rc = dsi_display_set_clk_src(display);
 	if (rc) {
-		DSI_ERR("[%s] failed to set DSI link clock source, rc=%d\n",
+		pr_err("[%s] failed to set DSI link clock source, rc=%d\n",
 			display->name, rc);
 		goto error_phy_disable;
 	}
 
 	rc = dsi_display_ctrl_init(display);
 	if (rc) {
-		DSI_ERR("[%s] failed to setup DSI controller, rc=%d\n",
+		pr_err("[%s] failed to setup DSI controller, rc=%d\n",
 		       display->name, rc);
 		goto error_phy_disable;
 	}
@@ -7225,7 +7235,7 @@ int dsi_display_prepare(struct dsi_display *display)
 
 	rc = dsi_display_ctrl_host_enable(display);
 	if (rc) {
-		DSI_ERR("[%s] failed to enable DSI host, rc=%d\n",
+		pr_err("[%s] failed to enable DSI host, rc=%d\n",
 		       display->name, rc);
 		goto error_ctrl_deinit;
 	}
@@ -7233,7 +7243,7 @@ int dsi_display_prepare(struct dsi_display *display)
 	rc = dsi_display_clk_ctrl(display->dsi_clk_handle,
 			DSI_LINK_CLK, DSI_CLK_ON);
 	if (rc) {
-		DSI_ERR("[%s] failed to enable DSI link clocks, rc=%d\n",
+		pr_err("[%s] failed to enable DSI link clocks, rc=%d\n",
 		       display->name, rc);
 		goto error_host_engine_off;
 	}
@@ -7246,7 +7256,7 @@ int dsi_display_prepare(struct dsi_display *display)
 		 */
 		rc = dsi_display_soft_reset(display);
 		if (rc) {
-			DSI_ERR("[%s] failed soft reset, rc=%d\n",
+			pr_err("[%s] failed soft reset, rc=%d\n",
 					display->name, rc);
 			goto error_ctrl_link_off;
 		}
@@ -7542,6 +7552,77 @@ int dsi_display_pre_commit(void *display,
 	}
 
 	return rc;
+}
+
+int dsi_display_dsi86_init(struct dsi_display *display)
+{
+	int rc = 0;
+	enum CONNECTION_STATUS tv_connection_status;
+
+	tv_connection_status = get_connection_status();
+	if(tv_connection_status == CONNECTED) {
+		pr_info("%s: hdmi cable connected, skip config dsi86 and edp-mux etc. \n", __func__);
+#if 0
+		rc = dsi_display_set_ulps(display, true);
+		if (rc) {
+			pr_err("[%s] failed to dsi86 set ulps enable, rc=%d\n",
+			       display->name, rc);
+		}
+#endif
+	} else {
+	/* DSI86 Swith ON Beigin */
+	pr_err("DSI86 Swith ON Beigin !!!\n");
+	rc = dsi86_power_on_pre_ulps();
+	if (rc) {
+		pr_err("[%s] failed to dsi86 power on part1, rc=%d\n", display->panel->name, rc);
+	}
+#if 0
+	rc = dsi_display_set_ulps(display, true);
+	if (rc) {
+		pr_err("[%s] failed to dsi86 set ulps enable, rc=%d\n",
+		       display->name, rc);
+	}
+#endif
+	//msleep(20);
+	rc = dsi86_power_on_post_ulps();
+	if (rc) {
+		pr_err("[%s] failed to dsi86 power on part2, rc=%d\n",
+		       display->name, rc);
+	}
+/*
+	rc = dsi86_boost_bypass_init();
+	if (rc) {
+		pr_err("[%s] dsi86_boost-bypass_init failed, rc=%d",
+			display->name, rc);
+	}
+	mdelay(3);
+*/
+	rc = dsi86_edp_mux_init();
+	if (rc) {
+		pr_err("[%s] failed to dsi86_edp_mux_init, rc=%d\n",
+			display->name, rc);
+	}
+	/*
+	rc = dsi86_backlight_init();
+	if (rc) {
+		pr_err("[%s] failed to dsi86_backlight_init, rc=%d\n",
+			display->name ,rc);
+	}
+	*/
+	rc = dsi86_edp_regs_init();
+	if (rc) {
+		pr_err("ulps set dsi86_edp_mipi_init failed rc=%d\n", rc);
+	}
+	}
+#if 0
+	rc = dsi_display_set_ulps(display, false);
+	if (rc) {
+		pr_err("[%s] failed to dsi86 set ulps false, rc=%d\n",
+		       display->name, rc);
+	}
+#endif
+  /* DSI86 Swith ON End */
+	return 0;
 }
 
 int dsi_display_enable(struct dsi_display *display)

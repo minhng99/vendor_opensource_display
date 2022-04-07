@@ -96,6 +96,7 @@ struct dsi_pinctrl_info {
 	struct pinctrl *pinctrl;
 	struct pinctrl_state *active;
 	struct pinctrl_state *suspend;
+	struct pinctrl_state *initpwm;
 };
 
 struct dsi_panel_phy_props {
@@ -110,6 +111,7 @@ struct dsi_backlight_config {
 
 	u32 bl_min_level;
 	u32 bl_max_level;
+	u32 bl_default_level;
 	u32 brightness_max_level;
 	u32 bl_level;
 	u32 bl_scale;
@@ -125,6 +127,7 @@ struct dsi_backlight_config {
 	/* WLED params */
 	struct led_trigger *wled;
 	struct backlight_device *raw_bd;
+	struct delayed_work bl_work;
 };
 
 struct dsi_reset_seq {
@@ -337,4 +340,5 @@ void dsi_panel_ext_bridge_put(struct dsi_panel *panel);
 void dsi_panel_calc_dsi_transfer_time(struct dsi_host_common_cfg *config,
 		struct dsi_display_mode *mode, u32 frame_threshold_us);
 
+bool dsi_panel_is_off(void);
 #endif /* _DSI_PANEL_H_ */

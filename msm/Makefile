@@ -100,6 +100,8 @@ msm_drm-$(CONFIG_DRM_MSM_DSI) += dsi/dsi_phy.o \
 	dsi/dsi_panel.o \
 	dsi/dsi_clk_manager.o \
 	dsi/dsi_display_test.o \
+	dsi/scaler.o \
+	dsi/dsi86-edp-mux.o \
 
 msm_drm-$(CONFIG_DSI_PARSER) += dsi/dsi_parser.o \
 
@@ -118,3 +120,7 @@ msm_drm-$(CONFIG_DRM_MSM) += \
 obj-$(CONFIG_DRM_MSM)	+= msm_drm.o
 
 obj-$(CONFIG_DRM_FBDEV_EMULATION) += msm_fbdev.o
+
+ifeq ($(CONFIG_QPNP_FACTORY_CHG_CTRL),y)
+ccflags-y += -DCONFIG_QPNP_FACTORY_SCALER_CTRL
+endif
